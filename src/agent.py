@@ -49,17 +49,15 @@ class Estimator:
         batch_size = tf.shape(self.X_pl)[0]
 
         # Three convolutional layers
-        conv1 = tf.contrib.layers.conv2d(
-            X, 32, 8, 4, activation_fn=tf.nn.relu)
-        conv2 = tf.contrib.layers.conv2d(
-            conv1, 64, 4, 2, activation_fn=tf.nn.relu)
-        conv3 = tf.contrib.layers.conv2d(
-            conv2, 64, 3, 1, activation_fn=tf.nn.relu)
+        conv1 = tf.keras.layers.Conv2D(32, 8, 4, activation=tf.nn.relu, kernel_initializer='glorot_normal')(X)
+        conv2 = tf.keras.layers.Conv2D(64, 4, 2, activation=tf.nn.relu, kernel_initializer='glorot_normal')(conv1)
+        conv3 = tf.keras.layers.Conv2D(64, 3, 1, activation=tf.nn.relu, kernel_initializer='glorot_normal')(conv2)
 
         # Fully connected layers
-        flattened = tf.contrib.layers.flatten(conv3)
-        fc1 = tf.contrib.layers.fully_connected(flattened, 512, activation_fn=tf.nn.relu)
-        self.predictions = tf.contrib.layers.fully_connected(fc1, len(VALID_ACTIONS), activation_fn=None)
+        flattened = tf.keras.layers.Flatten()(conv3)
+        fc1 = tf.keras.layers.Dense(512, activation=tf.nn.relu, kernel_initializer='glorot_normal')(flattened)
+        self.predictions = tf.keras.layers.Dense(len(VALID_ACTIONS), activation=None,
+                                                 kernel_initializer='glorot_normal')(fc1)
 
         # Get the predictions for the chosen actions only
         gather_indices = tf.range(batch_size) * tf.shape(self.predictions)[1] + self.actions_pl
@@ -71,7 +69,7 @@ class Estimator:
 
         # Optimizer Parameters from original paper
         self.optimizer = tf.train.RMSPropOptimizer(self.lr, 0.99, 0.0, 1e-6)
-        self.train_op = self.optimizer.minimize(self.loss, global_step=tf.contrib.framework.get_global_step())
+        self.train_op = self.optimizer.minimize(self.loss, global_step=tf.train.get_global_step())
 
         # Summaries for Tensorboard
 
@@ -111,7 +109,7 @@ class Estimator:
         """
         feed_dict = {self.X_pl: s, self.y_pl: y, self.actions_pl: a, self.lr: lr}
         global_step,  _, loss = sess.run(
-            [tf.contrib.framework.get_global_step(), self.train_op, self.loss],
+            [tf.train.get_global_step(), self.train_op, self.loss],
             feed_dict)
         return loss
 
@@ -222,9 +220,9 @@ def deep_q_learning(sess,
                     replay_memory_init_size=10_000,
                     update_target_estimator_every=10000,
                     discount_factor=0.99,
-                    epsilon_start=0.9,
-                    epsilon_end=0.1,
-                    epsilon_decay_steps=50_000,
+                    epsilon_start=0.1,
+                    epsilon_end=0.0001,
+                    epsilon_decay_steps=3_000_000,
                     batch_size=32):
     """
     Q-Learning algorithm for off-policy TD control using Function Approximation.
@@ -279,10 +277,10 @@ def deep_q_learning(sess,
         saver.restore(sess, latest_checkpoint)
 
     # Get the current time step
-    total_t = sess.run(tf.contrib.framework.get_global_step())
+    total_t = sess.run(tf.train.get_global_step())
 
     # The epsilon decay schedule
-    # epsilons = np.linspace(epsilon_start, epsilon_end, epsilon_decay_steps)
+    epsilons = np.linspace(epsilon_start, epsilon_end, epsilon_decay_steps)
     # The policy we're following
     policy = make_epsilon_greedy_policy(
         q_estimator,
@@ -296,7 +294,7 @@ def deep_q_learning(sess,
     a_vec = [0, 0, 0, 0]
     for i in range(replay_memory_init_size):
         # Populate replay memory!
-        action_probs = policy(sess, state, 0.15, None)
+        action_probs = policy(sess, state, epsilons[min(epsilon_decay_steps - 1, total_t)], None)
         action = np.random.choice(VALID_ACTIONS, p=action_probs)
         next_frame, reward, done, fr = env.step(action)
         next_state = np.append(state[:, :, 1:], np.expand_dims(next_frame, 2), axis=2)
@@ -341,8 +339,9 @@ def deep_q_learning(sess,
         for t in count():
 
             # Epsilon for this time step
-            # epsilon = epsilons[min(total_t, epsilon_decay_steps - 1)]
-            epsilon = 0.03
+            epsilon = epsilons[min(total_t, epsilon_decay_steps - 1)]
+            # epsilon = 0.03
+
             # Maybe update the target estimator
             if (total_t + 1) % update_target_estimator_every == 0:
                 copier.make(sess)
@@ -409,7 +408,7 @@ def deep_q_learning(sess,
         print(f"Replay memory main len : {len(replay_memory_main)}")
 
         # Wriring episode to video:
-        if (i_episode + 1) % 10 == 0:
+        if (i_episode + 1) % 100 == 0:
             height, width, _ = frames_to_write[0].shape
             output = cv2.VideoWriter(os.path.join(videos_dir, f'episode{i_episode + 1}.avi'),
                                      cv2.VideoWriter_fourcc(*'DIVX'), 30, (width, height))

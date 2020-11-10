@@ -44,7 +44,7 @@ class GDenv:
             new_state = cv2.cvtColor(frame[0:554, 246:800], cv2.COLOR_BGRA2GRAY)
             new_state = cv2.resize(new_state, (120, 120))
         done = self.level_failed(self.record_frame)
-        reward = -1 if done else 0
+        reward = -100 if done else 0
         self.fr += 1
 
         return new_state, reward, done, self.fr
