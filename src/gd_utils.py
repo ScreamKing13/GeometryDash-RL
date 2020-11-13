@@ -41,7 +41,7 @@ class GDenv:
         with mss.mss() as sct:
             frame = np.array(sct.grab(self.region_main), dtype=np.uint8)
             self.record_frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-            new_state = cv2.cvtColor(frame[0:554, 246:800], cv2.COLOR_BGRA2GRAY)
+            new_state = cv2.cvtColor(frame[0:554, 246:800], cv2.COLOR_BGRA2RGB)
             new_state = cv2.resize(new_state, (120, 120))
         done = self.level_failed(self.record_frame)
         reward = -100 if done else 0

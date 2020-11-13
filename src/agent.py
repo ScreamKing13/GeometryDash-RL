@@ -3,13 +3,51 @@ import numpy as np
 import os
 import tensorflow as tf
 import gd_utils
-from random import sample
+# from random import sample
 import time
 import cv2
 from collections import deque, namedtuple
 
 os.environ['TF_ENABLE_AUTO_MIXED_PRECISION'] = '1'
 Transition = namedtuple("Transition", ["state", "action", "reward", "next_state", "done"])
+
+
+class RelatedMemoryReplay:
+    def __init__(self, input_shape, memory_len=75_000):
+        i = tf.keras.layers.Input(input_shape, dtype=tf.uint8, batch_size=1)
+        x = tf.keras.applications.vgg16.preprocess_input(tf.cast(i, tf.float32))
+        core = tf.keras.applications.VGG16(include_top=False)
+        core = tf.keras.Sequential(core.layers[:7])
+        x = core(x)
+        out = tf.keras.layers.GlobalAveragePooling2D()(x)
+        self.model = tf.keras.Model(inputs=[i], outputs=[out])
+        self.model.trainable = False
+        self.feature_vectors = np.zeros(shape=(memory_len, self.model.output_shape[1]))
+        self.memory = []
+        self.index = 0
+        self.MAX_ELEMENTS = memory_len
+
+    def __len__(self):
+        return len(self.memory)
+
+    def add(self, frame, transition):
+        self.index %= self.MAX_ELEMENTS
+        if len(self.memory) < self.MAX_ELEMENTS:
+            self.memory.append(transition)
+        else:
+            self.memory[self.index] = transition
+        self.feature_vectors[self.index] = self.model.predict(np.expand_dims(frame, axis=0))[0]
+        self.index += 1
+
+    def sample_like(self, frame, batch_size: int):
+        feature_vector = self.model.predict(np.expand_dims(frame, axis=0))[0]
+        similarities = np.dot(feature_vector, self.feature_vectors.T)\
+                       / (np.linalg.norm(feature_vector) * np.linalg.norm(self.feature_vectors, axis=1))
+        mask = ~np.isnan(similarities)
+        ixs = np.arange(self.MAX_ELEMENTS)[mask]
+        similarities = similarities[mask]
+        sorted_ixs = similarities.argsort()[-batch_size:]
+        return [self.memory[i] for i in ixs[sorted_ixs]]
 
 
 class Estimator:
@@ -254,8 +292,9 @@ def deep_q_learning(sess,
     """
 
     # The replay memory
-    replay_memory_main = dict()
+    # replay_memory_main = dict()
     # replay_memory_dynamic = deque()
+    replay_memory = RelatedMemoryReplay((120, 120, 3), replay_memory_size)
     Transition = namedtuple("Transition", ["state", "action", "reward", "next_state", "done"])
     copier = ModelParametersCopier(q_estimator, target_estimator)
 
@@ -290,23 +329,27 @@ def deep_q_learning(sess,
     print("Populating replay memory...")
     env.retry()
     state, _, _, fr = env.step(0)
+    state = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)
     state = np.stack([state] * 4, axis=2)
-    a_vec = [0, 0, 0, 0]
+    # a_vec = [0, 0, 0, 0]
     for i in range(replay_memory_init_size):
         # Populate replay memory!
         action_probs = policy(sess, state, epsilons[min(epsilon_decay_steps - 1, total_t)], None)
         action = np.random.choice(VALID_ACTIONS, p=action_probs)
         next_frame, reward, done, fr = env.step(action)
-        next_state = np.append(state[:, :, 1:], np.expand_dims(next_frame, 2), axis=2)
-        put_to_mem(replay_memory_main, fr, a_vec, action, Transition(state, action, reward, next_state, done))
+        next_frame_g = cv2.cvtColor(next_frame, cv2.COLOR_RGB2GRAY)
+        next_state = np.append(state[:, :, 1:], np.expand_dims(next_frame_g, 2), axis=2)
+        replay_memory.add(next_frame, Transition(state, action, reward, next_state, done))
+        # put_to_mem(replay_memory_main, fr, a_vec, action, Transition(state, action, reward, next_state, done))
         # replay_memory_dynamic.append(Transition(state, action, reward, next_state, done))
-        a_vec = a_vec[1:] + [action]
+        # a_vec = a_vec[1:] + [action]
 
         if done:
             env.retry()
             state, _, _, fr = env.step(0)
+            state = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)
             state = np.stack([state] * 4, axis=2)
-            a_vec = [0, 0, 0, 0]
+            # a_vec = [0, 0, 0, 0]
         else:
             state = next_state
 
@@ -330,8 +373,9 @@ def deep_q_learning(sess,
         elapsed_time = time.perf_counter()
         env.retry()
         state, _, _, fr = env.step(0)
+        state = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)
         state = np.stack([state] * 4, axis=2)
-        a_vec = [0, 0, 0, 0]
+        # a_vec = [0, 0, 0, 0]
         framerate = 0
         frames_to_write = [env.record_frame]
 
@@ -361,14 +405,17 @@ def deep_q_learning(sess,
             #     replay_memory_dynamic.popleft()
 
             # Save transition to replay memory
-            next_state = np.append(state[:, :, 1:], np.expand_dims(next_frame, axis=2), axis=2)
-            put_to_mem(replay_memory_main, fr, a_vec, action, Transition(state, action, reward, next_state, done))
+            next_frame_g = cv2.cvtColor(next_frame, cv2.COLOR_RGB2GRAY)
+            next_state = np.append(state[:, :, 1:], np.expand_dims(next_frame_g, axis=2), axis=2)
+            replay_memory.add(next_frame, Transition(state, action, reward, next_state, done))
+            # put_to_mem(replay_memory_main, fr, a_vec, action, Transition(state, action, reward, next_state, done))
             # replay_memory_dynamic.append(Transition(state, action, reward, next_state, done))
-            a_vec = a_vec[1:] + [action]
+            # a_vec = a_vec[1:] + [action]
             ep_reward += reward
 
             # Sample a minibatch from the replay memory
-            samples = sample(list(replay_memory_main.values()), batch_size)
+            samples = replay_memory.sample_like(next_frame, batch_size)
+            # samples = sample(list(replay_memory_main.values()), batch_size)
             states_batch, action_batch, reward_batch, next_states_batch, done_batch = map(np.array, zip(*samples))
 
             # Calculate q values and targets
@@ -391,7 +438,7 @@ def deep_q_learning(sess,
             #              * q_values_next[np.arange(batch_size), actions_next]
 
             # TODO Perform gradient descent update
-            loss = q_estimator.update(sess, states_batch, action_batch, td_targets, 1 / len(replay_memory_main))
+            loss = q_estimator.update(sess, states_batch, action_batch, td_targets, 0.00022)
             # print(f"\rTotal t: {total_t}, loss: {loss}", end="")
 
             if done:
@@ -405,15 +452,15 @@ def deep_q_learning(sess,
         framerate /= elapsed_time
         print(f"\nEpisode's framerate: {framerate}")
         # print(f"Replay memory dynamic len : {len(replay_memory_dynamic)}")
-        print(f"Replay memory main len : {len(replay_memory_main)}")
+        print(f"Replay memory len : {len(replay_memory)}")
 
         # Wriring episode to video:
         if (i_episode + 1) % 100 == 0:
             height, width, _ = frames_to_write[0].shape
             output = cv2.VideoWriter(os.path.join(videos_dir, f'episode{i_episode + 1}.avi'),
-                                     cv2.VideoWriter_fourcc(*'DIVX'), 30, (width, height))
+                                     cv2.VideoWriter_fourcc(*'DIVX'), 20.0, (width, height))
             for frame in frames_to_write:
-                output.write(frame)
+                output.write(frame.astype('uint8'))
             output.release()
 
         # if (i_episode + 1) % 25 == 0:
@@ -464,7 +511,7 @@ with tf.Session() as sess:
                                                        target_estimator=target_estimator,
                                                        experiment_dir=experiment_dir,
                                                        num_episodes=10_000,
-                                                       replay_memory_size=125_000,
+                                                       replay_memory_size=50_000,
                                                        replay_memory_init_size=1_000,
                                                        update_target_estimator_every=10_000,
                                                        discount_factor=0.99,
