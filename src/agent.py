@@ -22,10 +22,15 @@ class RelatedMemoryReplay:
         out = tf.keras.layers.GlobalAveragePooling2D()(x)
         self.model = tf.keras.Model(inputs=[i], outputs=[out])
         self.model.trainable = False
-        self.feature_vectors = np.zeros(shape=(memory_len, self.model.output_shape[1]))
+        self.feature_vectors = np.zeros(shape=(memory_len, self.model.output_shape[1]), dtype=np.float32)
         self.memory = []
         self.index = 0
         self.MAX_ELEMENTS = memory_len
+        self.v = tf.placeholder(tf.float32, shape=self.model.output_shape[1])
+        self.vs = tf.placeholder(tf.float32, shape=self.feature_vectors.shape)
+        normalize_v = tf.nn.l2_normalize(self.v, 0)
+        normalize_vs = tf.nn.l2_normalize(self.vs, 1)
+        self.cos_similarity = tf.reduce_sum(tf.multiply(normalize_v, normalize_vs), axis=1)
 
     def __len__(self):
         return len(self.memory)
@@ -39,15 +44,19 @@ class RelatedMemoryReplay:
         self.feature_vectors[self.index] = self.model.predict(np.expand_dims(frame, axis=0))[0]
         self.index += 1
 
-    def sample_like(self, frame, batch_size: int):
+    def sample_like(self, frame, batch_size: int, sess):
         feature_vector = self.model.predict(np.expand_dims(frame, axis=0))[0]
-        similarities = np.dot(feature_vector, self.feature_vectors.T)\
-                       / (np.linalg.norm(feature_vector) * np.linalg.norm(self.feature_vectors, axis=1))
+        similarities = sess.run(self.cos_similarity, feed_dict={self.v: feature_vector, self.vs: self.feature_vectors})
         mask = ~np.isnan(similarities)
         ixs = np.arange(self.MAX_ELEMENTS)[mask]
         similarities = similarities[mask]
-        sorted_ixs = similarities.argsort()[-batch_size:]
-        return [self.memory[i] for i in ixs[sorted_ixs]]
+        mask = similarities > 0.9
+        res = ixs[mask][:batch_size]
+        if res.shape[0] < batch_size:
+            ixs = ixs[np.logical_and(similarities > 0, similarities < 0.9)]
+            ixs = np.random.choice(ixs, batch_size - res.shape[0])
+            res = np.append(res, ixs)
+        return [self.memory[i] for i in res]
 
 
 class Estimator:
