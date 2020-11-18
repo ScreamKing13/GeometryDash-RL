@@ -350,67 +350,38 @@ def deep_q_learning(sess,
         q_estimator,
         len(VALID_ACTIONS))
 
-    # Populate the replay memory with initial experience
-    print("Populating replay memory...")
-    env.retry()
-    state, _, _, fr = env.step(0)
-    state = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)
-    state = np.stack([state] * 4, axis=2)
-    # a_vec = [0, 0, 0, 0]
-    for i in range(replay_memory_init_size):
+    print("Initial data fit...")
+    for i in range(25):
         # Populate replay memory!
-        action_probs, _ = policy(sess, state, epsilons[min(epsilon_decay_steps - 1, total_t)], None)
-        action = np.random.choice(VALID_ACTIONS, p=action_probs)
-        next_frame, reward, done, fr = env.step(action)
-        next_frame_g = cv2.cvtColor(next_frame, cv2.COLOR_RGB2GRAY)
-        next_state = np.append(state[:, :, 1:], np.expand_dims(next_frame_g, 2), axis=2)
-        replay_memory.add(next_frame, Transition(state, action, reward, next_state, done))
-        # put_to_mem(replay_memory_main, fr, a_vec, action, Transition(state, action, reward, next_state, done))
-        # replay_memory_dynamic.append(Transition(state, action, reward, next_state, done))
-        # a_vec = a_vec[1:] + [action]
+        env.retry()
+        state, _, _, fr = env.step(0)
+        state = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)
+        state = np.stack([state] * 4, axis=2)
+        done = False
+        framerate = 0
+        elapsed_time = time.perf_counter()
 
-        if done:
-            env.retry()
-            state, _, _, fr = env.step(0)
-            state = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)
-            state = np.stack([state] * 4, axis=2)
-            # a_vec = [0, 0, 0, 0]
-        else:
-            state = next_state
+        while not done:
+            action_probs, _ = policy(sess, state, epsilons[min(epsilon_decay_steps - 1, total_t)], None)
+            action = np.random.choice(VALID_ACTIONS, p=action_probs)
+            print(f"\rAction: {action}", end="")
+            next_frame, reward, done, fr = env.step(action, True)
+            framerate += 1
+            samples = replay_memory.sample_random(batch_size)
+            states_batch, action_batch, reward_batch, next_states_batch, done_batch = map(np.array, zip(*samples))
+            q_values_next = q_estimator.predict(sess, next_states_batch)
+            best_actions = np.argmax(q_values_next, axis=1)
+            q_values_next_target = target_estimator.predict(sess, next_states_batch)
+            td_targets = reward_batch + (1 - done_batch) * \
+                         discount_factor * q_values_next_target[np.arange(len(best_actions)), best_actions]
+            loss = q_estimator.update(sess, states_batch, action_batch, td_targets, 0.00025)
 
-    # print("Initial data fit...")
-    # for i in range(25):
-    #     # Populate replay memory!
-    #     env.retry()
-    #     state, _, _, fr = env.step(0)
-    #     state = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)
-    #     state = np.stack([state] * 4, axis=2)
-    #     done = False
-    #     framerate = 0
-    #     elapsed_time = time.perf_counter()
-    #
-    #     while not done:
-    #         action_probs, _ = policy(sess, state, epsilons[min(epsilon_decay_steps - 1, total_t)], None)
-    #         action = np.random.choice(VALID_ACTIONS, p=action_probs)
-    #         print(f"\rAction: {action}", end="")
-    #         next_frame, reward, done, fr = env.step(action, True)
-    #         framerate += 1
-    #         samples = replay_memory.sample_random(batch_size)
-    #         states_batch, action_batch, reward_batch, next_states_batch, done_batch = map(np.array, zip(*samples))
-    #         q_values_next = q_estimator.predict(sess, next_states_batch)
-    #         best_actions = np.argmax(q_values_next, axis=1)
-    #         q_values_next_target = target_estimator.predict(sess, next_states_batch)
-    #         td_targets = reward_batch + (1 - done_batch) * \
-    #                      discount_factor * q_values_next_target[np.arange(len(best_actions)), best_actions]
-    #         loss = q_estimator.update(sess, states_batch, action_batch, td_targets, 0.00025)
-    #
-    #     elapsed_time = time.perf_counter() - elapsed_time
-    #     framerate /= elapsed_time
-    #     print(f"\nEpisode's framerate: {framerate}")
+        elapsed_time = time.perf_counter() - elapsed_time
+        framerate /= elapsed_time
+        print(f"\nEpisode's framerate: {framerate}")
 
-    # print("Loading pre-created memory samples...")
     print("Training started!")
-    for i_episode in range(4701, num_episodes):
+    for i_episode in range(num_episodes):
         ep_reward = 0
         # Save the current checkpoint
         if (i_episode + 1) % 25 == 0:
@@ -561,8 +532,7 @@ with tf.Session() as sess:
                                                        replay_memory_init_size=5_000,
                                                        update_target_estimator_every=10_000,
                                                        discount_factor=0.99,
-                                                       batch_size=64),
-        start=4701
+                                                       batch_size=64)
                                        ):
         print(f"Episode's #{i + 1} reward: {ep_reward}")
     print("Training done!")
