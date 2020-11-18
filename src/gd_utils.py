@@ -5,7 +5,7 @@ import cv2
 import time
 import numpy as np
 import mss
-from keyboard import PressKey, ReleaseKey
+from keyboard_my import PressKey, ReleaseKey
 from random import choice
 
 Region = namedtuple("Region", ['x', 'y', 'width', 'height'])
@@ -22,22 +22,24 @@ class GDenv:
         self.retry_pos = (self.region_main['left'] + 230, self.region_main['top'] + 500)
         self.fr = 0
         self.record_frame = None
+        self.pressed = False
 
     def retry(self):
         self.fr = 0
-        pygui.click(self.retry_pos)
-
-    @staticmethod
-    def jump():
-        PressKey()
+        self.pressed = False
         ReleaseKey()
+        pygui.click(self.retry_pos)
 
     def level_failed(self, frame):
         return pygui.locate(self.retry_img, frame[453:547, 188: 278], confidence=0.9) is not None
 
-    def step(self, action):
-        if action == 1:
-            self.jump()
+    def step(self, action, record=False):
+        if not self.pressed and action == 1:
+            PressKey()
+            self.pressed = True
+        elif self.pressed and action == 0:
+            ReleaseKey()
+            self.pressed = False
         with mss.mss() as sct:
             frame = np.array(sct.grab(self.region_main), dtype=np.uint8)
             self.record_frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
