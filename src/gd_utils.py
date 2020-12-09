@@ -14,7 +14,7 @@ res_dir = normpath(r"C:\Users\screm\PycharmProjects\GD_RL\res")
 
 class GDenv:
     def __init__(self, resolution):
-        self.region_corner = Region(*pygui.locateOnScreen(join(res_dir, "gd_upper.png")))
+        self.region_corner = Region(*pygui.locateOnScreen(join(res_dir, "gd_upper_new.png")))
         self.region_main = Region(self.region_corner.x, self.region_corner.y + self.region_corner.height, *resolution)
         self.region_main = dict(zip(('left', 'top', 'width', 'height'), [*self.region_main]))
         pygui.click(self.region_corner)
@@ -26,9 +26,9 @@ class GDenv:
 
     def retry(self):
         self.fr = 0
-        self.pressed = False
-        ReleaseKey()
-        pygui.click(self.retry_pos)
+        pygui.click(self.region_corner)
+        PressKey(0x39, False)
+        ReleaseKey(0x39, False)
 
     def level_failed(self, frame):
         return pygui.locate(self.retry_img, frame[453:547, 188: 278], confidence=0.9) is not None
@@ -36,9 +36,11 @@ class GDenv:
     def step(self, action, record=False):
         if not self.pressed and action == 1:
             PressKey()
+            time.sleep(0.05)
             self.pressed = True
         elif self.pressed and action == 0:
             ReleaseKey()
+            time.sleep(0.05)
             self.pressed = False
         with mss.mss() as sct:
             frame = np.array(sct.grab(self.region_main), dtype=np.uint8)
@@ -71,7 +73,6 @@ class GDenv:
         for frame in frames:
             output.write(frame)
         output.release()
-
 
 if __name__ == "__main__":
     e = GDenv((800, 600))

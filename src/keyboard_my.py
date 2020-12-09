@@ -47,21 +47,23 @@ class Input(ctypes.Structure):
 
 # Actuals Functions
 
-def PressKey():
+def PressKey(key_scancode=Up, extended=True):
     keybdFlags = KEYEVENTF_SCANCODE
-    keybdFlags |= KEYEVENTF_EXTENDEDKEY
+    if extended:
+        keybdFlags |= KEYEVENTF_EXTENDEDKEY
     extra = ctypes.c_ulong(0)
     ii_ = Input_I()
-    ii_.ki = KeyBdInput(0, Up, keybdFlags, 0, ctypes.pointer(extra))
+    ii_.ki = KeyBdInput(0, key_scancode, keybdFlags, 0, ctypes.pointer(extra))
     x = Input(ctypes.c_ulong(1), ii_)
     SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
 
-def ReleaseKey():
+def ReleaseKey(key_scancode=Up, extended=True):
     keybdFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
-    keybdFlags |= KEYEVENTF_EXTENDEDKEY
+    if extended:
+        keybdFlags |= KEYEVENTF_EXTENDEDKEY
     extra = ctypes.c_ulong(0)
     ii_ = Input_I()
-    ii_.ki = KeyBdInput(0, Up, keybdFlags, 0, ctypes.pointer(extra))
+    ii_.ki = KeyBdInput(0, key_scancode, keybdFlags, 0, ctypes.pointer(extra))
     x = Input(ctypes.c_ulong(1), ii_)
     SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
 
