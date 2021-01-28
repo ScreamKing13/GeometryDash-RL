@@ -26,7 +26,6 @@ class GDenv:
 
     def retry(self):
         self.fr = 0
-        pygui.click(self.region_corner)
         PressKey(0x39, False)
         ReleaseKey(0x39, False)
 
