@@ -8,6 +8,8 @@ import time
 import cv2
 from collections import namedtuple
 import shelve
+import matplotlib.pyplot as plt
+from pylab import *
 import keyboard
 
 os.environ['TF_ENABLE_AUTO_MIXED_PRECISION'] = '1'
@@ -26,6 +28,9 @@ class RelatedMemoryReplay:
             self.priorities[:self.BASE_MEMORY] = np.array([self.max_priority for _ in range(self.BASE_MEMORY)])
         else:
             self.BASE_MEMORY = 0
+        # Normalize the feature vectors
+        # if self.BASE_MEMORY != 0:
+        #     self.initial_norm()
         self.index = 0
         self.MAX_ELEMENTS_VOLATILE = memory_len - self.BASE_MEMORY
         self.v = tf.placeholder(tf.float32, shape=feature_shape)
@@ -33,6 +38,7 @@ class RelatedMemoryReplay:
         normalize_v = tf.nn.l2_normalize(self.v, 0)
         normalize_vs = tf.nn.l2_normalize(self.vs, 1)
         self.cos_similarity = tf.math.divide(tf.math.add(1.0, tf.reduce_sum(tf.multiply(normalize_v, normalize_vs), axis=1)), 2.0)
+        # self.angle_similarity = tf.math.subtract(1.0, tf.math.divide(tf.math.acos(self.cos_similarity), np.pi))
 
     def __len__(self):
         return len(self.memory)
@@ -54,13 +60,38 @@ class RelatedMemoryReplay:
         ixs = np.arange(self.MAX_ELEMENTS_VOLATILE + self.BASE_MEMORY)[:len(self.memory)]
         similarities = similarities[:len(self.memory)]
         similarities = similarities ** alpha
+        # priorities = np.abs(self.priorities[:len(self.memory)]) + 1e-5
         similarities /= np.sum(similarities)
+        # priorities /= np.sum(priorities)
+        # final_metric = alpha * similarities + (1 - alpha) * priorities
         ixs = np.random.choice(ixs, batch_size, p=similarities)
         return [self.memory[i] for i in ixs], ixs
 
     def rebase(self, estimator, sess):
         for i, entry in enumerate(self.memory):
             self.feature_vectors[i] = estimator.get_feature_vector(sess, entry.state)
+
+    # def update_priotities(self, new_priorities, ixs):
+    #     for i, p in zip(ixs, new_priorities):
+    #         self.priorities[i] = p
+    #         self.max_priority = max(self.max_priority, abs(p))
+
+    # def normalize(self, feature_vec):
+    #     self.feature_vectors_max = np.maximum(self.feature_vectors_max, feature_vec)
+    #     self.feature_vectors_min = np.minimum(self.feature_vectors_min, feature_vec)
+    #     self.feature_vectors_mean += 1 / (self.feature_vectors.shape[0] / 10) * \
+    #                                  (feature_vec - self.feature_vectors_mean)
+    #     feature_vec = (feature_vec - self.feature_vectors_mean) / \
+    #                            (self.feature_vectors_max - self.feature_vectors_min)
+    #     return feature_vec
+
+    # def initial_norm(self):
+    #     self.feature_vectors_mean = self.feature_vectors[:len(self.memory)].mean(axis=0)
+    #     self.feature_vectors_max = self.feature_vectors[:len(self.memory)].max(axis=0)
+    #     self.feature_vectors_min = self.feature_vectors[:len(self.memory)].min(axis=0)
+    #     self.feature_vectors[:len(self.memory)] = (self.feature_vectors[
+    #                                                :len(self.memory)] - self.feature_vectors_mean) / \
+    #                                               (self.feature_vectors_max - self.feature_vectors_min)
 
     def sample_random(self, batch_size: int):
         ixs_random = external_sample(range(len(self.memory)), batch_size)
@@ -76,6 +107,21 @@ class RelatedMemoryReplay:
             self.memory = sh["memory"]
             loaded_vectors = sh["feature_vectors"]
         self.feature_vectors[:len(self.memory)] = loaded_vectors[:len(self.memory)]
+
+
+# class FrameProcessor:
+#     def __init__(self, input_shape):
+#         i = tf.keras.layers.Input(input_shape, dtype=tf.uint8, batch_size=1)
+#         x = tf.keras.applications.vgg16.preprocess_input(tf.cast(i, tf.float32))
+#         core = tf.keras.applications.VGG16(include_top=False)
+#         core = tf.keras.Sequential(core.layers[:7])
+#         x = core(x)
+#         out = tf.keras.layers.GlobalAveragePooling2D()(x)
+#         self.model = tf.keras.Model(inputs=[i], outputs=[out])
+#         self.model.trainable = False
+#
+#     def process(self, frame):
+#         return self.model.predict(np.expand_dims(frame, axis=0))[0]
 
 
 class Estimator:
@@ -117,24 +163,31 @@ class Estimator:
 
         # Three convolutional layers
         conv1 = tf.keras.layers.Conv2D(32, 8, 4, activation=tf.nn.relu, kernel_initializer='glorot_normal')(X)
+        # sp_dr1 = tf.keras.layers.SpatialDropout2D(0.2)(conv1, training=self.training)
         conv2 = tf.keras.layers.Conv2D(64, 4, 2, activation=tf.nn.relu, kernel_initializer='glorot_normal')(conv1)
+        # sp_dr2 = tf.keras.layers.SpatialDropout2D(0.2)(conv2, training=self.training)
         conv3 = tf.keras.layers.Conv2D(64, 3, 1, activation=tf.nn.relu, kernel_initializer='glorot_normal')(conv2)
-
+        # sp_dr3 = tf.keras.layers.SpatialDropout2D(0.2)(conv3, training=self.training)
         # Fully connected layers
         flattened = tf.keras.layers.Flatten()(conv3)
         self.fc1_l = tf.keras.layers.Dense(512, activation=tf.nn.relu,
                                          kernel_initializer='glorot_normal',
+                                         # kernel_regularizer=tf.keras.regularizers.l2(0.0001)
                                          )
         self.fc1_o  = self.fc1_l(flattened)
         self.bn1 = tf.keras.layers.BatchNormalization()(self.fc1_o, training=self.training)
         self.fc2_l = tf.keras.layers.Dense(128, activation=tf.nn.relu,
                                          kernel_initializer='glorot_normal',
+                                         # kernel_regularizer=tf.keras.regularizers.l2(0.0001)
                                          )
         self.fc2_o  = self.fc2_l(self.bn1)
         self.bn2 = tf.keras.layers.BatchNormalization()(self.fc2_o, training=self.training)
+        # self.features = tf.keras.layers.BatchNormalization()(self.fc1)
+        # dr2 = tf.keras.layers.Dropout(0.4)(self.fc1, training=self.training)
         self.predictions_l = tf.keras.layers.Dense(len(VALID_ACTIONS), activation=None,
-                                         kernel_initializer='glorot_normal',
-                                         )
+                                                 kernel_initializer='glorot_normal',
+                                                 # kernel_regularizer=tf.keras.regularizers.l2(0.0001)
+                                                 )
         self.predictions = self.predictions_l(self.bn2)
 
         # Get the predictions for the chosen actions only
@@ -144,6 +197,8 @@ class Estimator:
         # Calculate the loss
         self.td_errors = tf.subtract(self.y_pl, self.action_predictions)
         self.losses = tf.squared_difference(self.y_pl, self.action_predictions)
+        # self.loss = tf.math.add_n([tf.reduce_mean(self.losses), self.fc1_l.losses[0],
+        #                            self.fc2_l.losses[0], self.predictions_l.losses[0]])
         self.loss = tf.reduce_mean(self.losses)
 
         # Optimizer Parameters from original paper
@@ -268,6 +323,41 @@ def make_epsilon_greedy_policy(estimator, nA):
     return policy_fn
 
 
+def random_mini_batches(memory, mini_batch_size=64):
+    """
+    Creates a list of random minibatches from X
+
+    Arguments:
+    X -- input data, of shape (input size, number of examples)
+    Y -- true "label" vector (1 for blue dot / 0 for red dot), of shape (1, number of examples)
+    mini_batch_size -- size of the mini-batches, integer
+
+    Returns:
+    mini_batches -- list of synchronous (mini_batch_X, mini_batch_Y)
+    """
+
+    m = len(memory)  # number of training examples
+    mini_batches = []
+
+    # Step 1: Shuffle (X, Y)
+    np.random.shuffle(memory)
+
+    # Step 2: Partition (shuffled_X, shuffled_Y). Minus the end case.
+    num_complete_minibatches = int(np.floor(m / mini_batch_size))  # number of mini batches of size mini_batch_size in your partitionning
+    for k in range(0, num_complete_minibatches):
+        mini_batches.append([memory[j] for j in range(mini_batch_size * k, mini_batch_size * (k + 1))])
+    k = num_complete_minibatches - 1
+    # Handling the end case (last mini-batch < mini_batch_size)
+    if m % mini_batch_size != 0:
+        mini_batches.append([memory[j] for j in range(mini_batch_size * (k + 1), m)])
+
+    return mini_batches
+
+
+def put_to_mem(mem, fr, a_vec, a_next, transition):
+    mem[(fr, tuple(a_vec), a_next)] = transition
+
+
 def deep_q_learning(sess,
                     env,
                     q_estimator,
@@ -283,14 +373,15 @@ def deep_q_learning(sess,
                     epsilon_decay_steps=300_000,
                     batch_size=32):
     """
-    N(10)-step Q-Learning algorithm for off-policy TD control using Function Approximation.
+    Q-Learning algorithm for off-policy TD control using Function Approximation.
     Finds the optimal greedy policy while following an epsilon-greedy policy.
 
     Args:
         sess: Tensorflow Session object
-        env: Geometry Dash environment emulator
+        env: OpenAI environment
         q_estimator: Estimator object used for the q values
         target_estimator: Estimator object used for the targets
+        state_processor: A StateProcessor object
         num_episodes: Number of episodes to run for
         experiment_dir: Directory to save Tensorflow summaries in
         replay_memory_size: Size of the replay memory
@@ -300,15 +391,17 @@ def deep_q_learning(sess,
           target estimator every N steps
         discount_factor: Gamma discount factor
         epsilon_start: Chance to sample a random action when taking an action.
-          Epsilon is decayed over time and this is the start value (Not used)
-        epsilon_end: The final minimum value of epsilon after decaying is done (Not used)
-        epsilon_decay_steps: Number of steps to decay epsilon over (Not used)
+          Epsilon is decayed over time and this is the start value
+        epsilon_end: The final minimum value of epsilon after decaying is done
+        epsilon_decay_steps: Number of steps to decay epsilon over
         batch_size: Size of batches to sample from the replay memory
+        record_video_every: Record a video every N episodes
 
     Returns:
-        Yields tuple of (Episode loss, Number of parameter updates) at the end of every episode.
+        An EpisodeStats object with two numpy arrays for episode_lengths and episode_rewards.
     """
 
+    # processor = FrameProcessor((84, 84, 3))
     replay_memory = RelatedMemoryReplay(128, replay_memory_size)
     copier = ModelParametersCopier(q_estimator, target_estimator)
 
@@ -332,10 +425,12 @@ def deep_q_learning(sess,
     # Get the current time step
     total_t = sess.run(tf.train.get_global_step())
 
-    # The learning rate decay schedule
+    # The epsilon decay schedule
     lrs = np.linspace(0.00025, 0.000025, 500_000)
+    # max_attempt_length = 0
+    # attempt_discount = 0.7
 
-    epsilon = 0.1
+    epsilon = 0.
     # The policy we're following
     policy = make_epsilon_greedy_policy(
         q_estimator,
@@ -343,6 +438,10 @@ def deep_q_learning(sess,
 
     print("Populating replay memory...")
     n_step = 10
+    # index = 0
+    # frames_per_episode = np.array([40 for _ in range(3)])
+    # checkpoint_every = 2
+    # checkpointed = False
     while len(replay_memory) < replay_memory_init_size:
         env.retry()
         done = False
@@ -360,18 +459,17 @@ def deep_q_learning(sess,
             # Populate replay memory!
             action_probs, _ = policy(sess, state, epsilon, None, training=False)
             action = np.random.choice(VALID_ACTIONS, p=action_probs)
+            # action = 1 if keyboard.is_pressed('W') else 0
             next_frame, reward, done, fr, _, _ = env.step(action)
             feature_vec = target_estimator.get_feature_vector(sess, state)
-
             rewards_window.append(reward)
             states_window.append(state)
             actions_window.append(action)
             feature_vecs.append(feature_vec)
-
             next_frame_g = cv2.cvtColor(next_frame, cv2.COLOR_RGB2GRAY)
             image = cv2.Canny(next_frame_g, threshold1=275, threshold2=300)
             next_state = np.append(state[:, :, 1:], np.expand_dims(image, axis=2), axis=2)
-
+            # feature_vec = processor.process(next_frame)
             if len(rewards_window) == n_step:
                 replay_memory.add(feature_vecs[0],
                                   Transition(states_window[0], actions_window[0], rewards_window[:], next_state, done),
@@ -380,7 +478,13 @@ def deep_q_learning(sess,
                 rewards_window.pop(0)
                 actions_window.pop(0)
                 feature_vecs.pop(0)
-
+            # if int(time.perf_counter() - elapsed_time + 1) % (checkpoint_every) == 0:
+            #     if not checkpointed:
+            #         env.checkpoint()
+            #         checkpoint_every = 2
+            #         checkpointed = True
+            # else:
+            #     checkpointed = False
             if done:
                 while len(rewards_window) != 0:
                     replay_memory.add(feature_vecs[0],
@@ -396,19 +500,37 @@ def deep_q_learning(sess,
                 break
             else:
                 state = next_state
+                # time.sleep(1.0 / 40)
                 time.sleep(1.0 / 70)
 
+        # max_attempt_length = max(max_attempt_length, fr)
         elapsed_time = time.perf_counter() - elapsed_time
         fps =  fr / elapsed_time
+        # index %= 3
+        # frames_per_episode[index] = fr
+        # index += 1
+        # if np.all(frames_per_episode < 40):
+        #     env.uncheckpoint()
+            # checkpoint_every -= 1
+            # frames_per_episode = np.array([40 for _ in range(3)])
         print(f"Replay memory length: {len(replay_memory)}")
         print(f"Framerate: {fps} | frames: {fr}")
+        # print(f"Current max attempt length: {max_attempt_length}, fr: {fr}")
 
+    # print("Memory normalization initialized.")
+    # replay_memory.initial_norm()
+
+    # min_loss = 0.01
     print("Training started!")
+    # index = 0
+    # frames_per_episode = np.array([40 for _ in range(3)])
+    # checkpoint_every = 3
+    # checkpointed = False
     n_step_discount = np.array([discount_factor ** i for i in range(n_step)])
     for i_episode in range(num_episodes):
+        ep_reward = 0
         # Reset the environment
         env.retry()
-        ep_reward = 0
         elapsed_time = time.perf_counter()
         state, _, _, fr, reached, attempts = env.step(0)
         state = cv2.cvtColor(state, cv2.COLOR_RGB2GRAY)
@@ -426,10 +548,15 @@ def deep_q_learning(sess,
 
         # One step in the environment
         for t in count(start=1):
+
+            # Epsilon for this time step
+            # epsilon = 0.25
+            # eps = 0.1 if fr >= max_attempt_length else 0
             # Maybe update the target estimator
             if (total_t + 1) % update_target_estimator_every == 0:
                 env.pause()
                 copier.make(sess)
+                # replay_memory.rebase(target_estimator, sess)
                 env.unpause()
 
             # Take a step in the environment
@@ -437,12 +564,10 @@ def deep_q_learning(sess,
             action = np.random.choice(VALID_ACTIONS, p=action_probs)
             next_frame, reward, done, fr, reached, attempts = env.step(action)
             feature_vec = target_estimator.get_feature_vector(sess, state)
-
             rewards_window.append(reward)
             states_window.append(state)
             actions_window.append(action)
             feature_vecs.append(feature_vec)
-
             if (i_episode + 1) % 100 == 0:
                 frames_to_write.append(env.record_frame)
             print(f"\rAction values: {action_values}, total_t: {total_t}", end="")
@@ -451,7 +576,8 @@ def deep_q_learning(sess,
             next_frame_g = cv2.cvtColor(next_frame, cv2.COLOR_RGB2GRAY)
             image = cv2.Canny(next_frame_g, threshold1=275, threshold2=300)
             next_state = np.append(state[:, :, 1:], np.expand_dims(image, axis=2), axis=2)
-
+            # feature_vec = processor.process(next_frame)
+            # feature_vec = replay_memory.normalize(feature_vec)
             if len(rewards_window) == n_step:
                 replay_memory.add(feature_vecs[0],
                                   Transition(states_window[0], actions_window[0], rewards_window[:], next_state,
@@ -463,9 +589,24 @@ def deep_q_learning(sess,
                 feature_vecs.pop(0)
             ep_reward += reward
 
-            # Sample related transitions from memory replay
+            # if int(time.perf_counter() - elapsed_time + 1) % (checkpoint_every) == 0:
+            #     if not checkpointed:
+            #         env.checkpoint()
+            #         checkpoint_every = 3
+            #         checkpointed = True
+            # else:
+            #     checkpointed = False
+
+            # Sample a minibatch from the replay memory
+            # if np.random.rand() < epsilon:
+            #     samples_rnd, ixs = replay_memory.sample_like(feature_vec, batch_size, sess, alpha=0)
+            #     states_batch, action_batch, reward_batch, next_states_batch, done_batch = map(np.array, zip(*samples_rnd))
+            # else:
             samples_rlt, ixs = replay_memory.sample_like(feature_vec, batch_size, sess, alpha=0.6)
             states_batch, action_batch, reward_batch, next_states_batch, done_batch = map(np.array, zip(*samples_rlt))
+            # samples = replay_memory.sample_random(batch_size)
+            # states_batch, action_batch, reward_batch, next_states_batch, done_batch = map(np.array, zip(*samples))
+            # time.sleep(1/40)
 
             # This is where Double Q-Learning comes in!
             q_values_next = q_estimator.predict(sess, next_states_batch)
@@ -474,13 +615,13 @@ def deep_q_learning(sess,
             td_targets = np.dot(reward_batch, n_step_discount) + (1 - done_batch) * \
                          discount_factor ** n_step * q_values_next_target[np.arange(len(best_actions)), best_actions]
 
-            # Learning rate decays until 500k parameter updates
             lr = lrs[min(499_999, total_t)]
             batch_loss, _ = q_estimator.update(sess, states_batch, action_batch, td_targets, lr)
             loss += batch_loss
+            # replay_memory.update_priotities(td_errors, ixs)
+
             update_num += 1
             total_t += 1
-
             if done:
                 while len(rewards_window) != 0:
                     replay_memory.add(feature_vecs[0],
@@ -500,15 +641,24 @@ def deep_q_learning(sess,
         loss /= update_num
         elapsed_time = time.perf_counter() - elapsed_time
         fps = fr / elapsed_time
+        # index %= 3
+        # frames_per_episode[index] = fr
+        # index += 1
+        # if np.all(frames_per_episode < 40):
+        #     env.uncheckpoint()
+            # checkpoint_every -= 1
+            # frames_per_episode = np.array([40 for _ in range(3)])
         print(f"\nEpisode's framerate: {fps}")
         print(f"Replay memory len : {len(replay_memory)}")
+        # print(f"Current max attempt length: {max_attempt_length}, fr: {fr}")
+        # max_attempt_length = fr if fr > max_attempt_length else int(max_attempt_length * attempt_discount)
 
         if (i_episode + 1) % 25 == 0:
             env.pause()
             # Save the current checkpoint
             saver.save(tf.get_default_session(), checkpoint_path)
-            # Write episode to video every 100 episodes:
             if (i_episode + 1) % 100 == 0:
+                # Write episode to video:
                 height, width, _ = frames_to_write[0].shape
                 output = cv2.VideoWriter(os.path.join(videos_dir, f'episode{i_episode + 1}.avi'),
                                          cv2.VideoWriter_fourcc(*'DIVX'), 20, (width, height))
@@ -519,6 +669,7 @@ def deep_q_learning(sess,
 
         # Add summaries to tensorboard
         episode_summary = tf.Summary()
+        # episode_summary.value.add(simple_value=eps, tag="episode/epsilon")
         if done and reached:
             episode_summary.value.add(simple_value=attempts, tag="episode/attempts")
         episode_summary.value.add(simple_value=ep_reward, tag="episode/reward")
@@ -557,9 +708,9 @@ with tf.Session(config=config) as sess:
                                                        q_estimator=q_estimator,
                                                        target_estimator=target_estimator,
                                                        experiment_dir=experiment_dir,
-                                                       num_episodes=10_000,
+                                                       num_episodes=20_000,
                                                        replay_memory_size=90_000,
-                                                       replay_memory_init_size=5_000,
+                                                       replay_memory_init_size=105_000,
                                                        update_target_estimator_every=10_000,
                                                        discount_factor=0.9,
                                                        batch_size=32)

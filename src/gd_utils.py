@@ -138,8 +138,10 @@ class GDenv:
                 self.uncheckpoint()
                 self.uncheckpoint()
         self.fr += 1
-
-        return new_state, reward, done, self.fr, self.reached, self.attempt_counter
+        if self.mode == "practice":
+            return new_state, reward, done, self.fr, self.reached, self.attempt_counter
+        else:
+            return new_state, reward, done, self.fr, self.reached, 1
 
     def pause(self):
         PressKey(0x01, False)
