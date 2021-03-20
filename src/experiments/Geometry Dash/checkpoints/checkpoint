@@ -1,0 +1,2 @@
+model_checkpoint_path: "C:\\Users\\screm\\PycharmProjects\\GD_RL\\src\\experiments\\Geometry Dash\\checkpoints\\model"
+all_model_checkpoint_paths: "C:\\Users\\screm\\PycharmProjects\\GD_RL\\src\\experiments\\Geometry Dash\\checkpoints\\model"
