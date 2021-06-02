@@ -1,7 +1,7 @@
 from itertools import count
 import numpy as np
 import os
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 import gd_utils
 from random import sample as external_sample
 import time
@@ -9,7 +9,7 @@ import cv2
 from collections import namedtuple
 import shelve
 import keyboard
-
+tf.disable_v2_behavior()
 os.environ['TF_ENABLE_AUTO_MIXED_PRECISION'] = '1'
 Transition = namedtuple("Transition", ["state", "action", "rewards", "next_state", "done"])
 
@@ -559,7 +559,7 @@ with tf.Session(config=config) as sess:
                                                        experiment_dir=experiment_dir,
                                                        num_episodes=10_000,
                                                        replay_memory_size=90_000,
-                                                       replay_memory_init_size=5_000,
+                                                       replay_memory_init_size=1_000,
                                                        update_target_estimator_every=10_000,
                                                        discount_factor=0.9,
                                                        batch_size=32)
